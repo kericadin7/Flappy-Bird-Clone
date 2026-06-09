@@ -134,7 +134,7 @@
   <div class="panel visible" id="startScreen">
     <div class="bird-emoji">🐦</div>
     <h1>Flappy Bird</h1>
-    <p class="sub">Tap, click, or press<br><strong>SPACEBAR</strong> to flap your wings!</p>
+    <p class="sub">Press <strong>SPACEBAR</strong> or tap<br>to launch the bird and start!</p>
     <button id="startBtn">▶ &nbsp;Play</button>
   </div>
 
@@ -154,14 +154,15 @@
   const ctx     = canvas.getContext('2d');
   const wrapper = document.getElementById('wrapper');
 
-  const BASE_W = 360;
-  const BASE_H = 640;
+  const BASE_W = 420;   // wider logical canvas
+  const BASE_H = 680;
   let   scale  = 1;
 
   function resize () {
     const maxW = window.innerWidth  - 16;
     const maxH = window.innerHeight - 16;
-    scale = Math.min(maxW / BASE_W, maxH / BASE_H, 2);  // cap at 2× on huge screens
+    // raised desktop cap from 2× → 2.8× so it fills bigger screens better
+    scale = Math.min(maxW / BASE_W, maxH / BASE_H, 3.5); // generous cap for large desktop screens
     const W = Math.round(BASE_W * scale);
     const H = Math.round(BASE_H * scale);
     canvas.width  = W;
@@ -173,38 +174,44 @@
   resize();
 
   /* helpers that convert logical coords to canvas pixels */
-  const px  = v => v * scale;
-  const pxr = v => Math.round(v * scale);
+  const px = v => v * scale;
 
-  /* ── Game constants (logical units) ─────────────────── */
-  const BIRD_X        = 80;
-  const BIRD_R        = 18;      // collision radius
-  const GRAVITY       = 0.55;
-  const FLAP_POWER    = -10.5;
-  const PIPE_W        = 58;
-  const PIPE_GAP      = 160;
-  const PIPE_SPEED    = 2.6;
-  const PIPE_INTERVAL = 90;      // frames between new pipes
+  /* ── Physics constants ───────────────────────────────── */
+  const BIRD_X        = 90;
+  const BIRD_R        = 18;
+  const GRAVITY       = 0.22;   // very gentle fall
+  const FLAP_POWER    = -6.0;   // soft upward kick to match
+  const PIPE_W        = 62;
+  const PIPE_GAP      = 185;    // wide gap — forgiving
+  const PIPE_SPEED    = 2.2;
+  const PIPE_INTERVAL = 100;
   const GROUND_H      = 70;
 
   /* ── State ───────────────────────────────────────────── */
-  let state;        // 'idle' | 'playing' | 'dead'
+  // States: 'idle' → splash screen shown, canvas animating
+  //         'ready' → panel hidden, bird hovers/bobs, no pipes yet,
+  //                   first flap launches the game
+  //         'playing' → full game running
+  //         'dead' → collision, bird falls, panel fades in
+  let state;
   let bird, pipes, score, best, frame, particles;
+  let bobT = 0; // time counter for idle bob animation
 
   function initGame () {
-    bird = { y: BASE_H / 2, vy: 0, angle: 0 };
-    pipes = [];
+    bird      = { y: BASE_H / 2, vy: 0, angle: 0 };
+    pipes     = [];
     particles = [];
-    score = 0;
-    frame = 0;
+    score     = 0;
+    frame     = 0;
+    bobT      = 0;
     document.getElementById('scoreText').textContent = '0';
   }
 
   /* ── DOM panels ──────────────────────────────────────── */
-  const startScreen   = document.getElementById('startScreen');
-  const gameOverScreen= document.getElementById('gameOverScreen');
-  const finalScoreEl  = document.getElementById('finalScore');
-  const bestTextEl    = document.getElementById('bestText');
+  const startScreen    = document.getElementById('startScreen');
+  const gameOverScreen = document.getElementById('gameOverScreen');
+  const finalScoreEl   = document.getElementById('finalScore');
+  const bestTextEl     = document.getElementById('bestText');
 
   function showPanel (id) {
     startScreen.classList.remove('visible');
@@ -212,11 +219,39 @@
     if (id) document.getElementById(id).classList.add('visible');
   }
 
+  /* ── Transition to READY state ───────────────────────── */
+  // Called by both the Play button and the Try-Again button.
+  // Resets everything, places bird at vertical center, and waits
+  // for the first flap — no gravity applied until 'playing'.
+  function goReady () {
+    initGame();
+    bird.y  = BASE_H / 2;  // explicitly centre the bird
+    bird.vy = 0;
+    state   = 'ready';
+    showPanel(null);
+  }
+
   /* ── Controls ────────────────────────────────────────── */
   function flap () {
     if (state === 'idle') {
-      state = 'playing';
-      showPanel(null);
+      // Spacebar/tap on splash: jump straight to ready then launch
+      goReady();
+      // Small delay so bird renders at centre before physics kick in
+      setTimeout(() => {
+        if (state === 'ready') {
+          bird.vy = FLAP_POWER;
+          state   = 'playing';
+          spawnParticles(BIRD_X, bird.y, 6, '#fff');
+        }
+      }, 80);
+      return;
+    }
+    if (state === 'ready') {
+      // First flap after pressing Play / Try Again — launch upward
+      bird.vy = FLAP_POWER;
+      state   = 'playing';
+      spawnParticles(BIRD_X, bird.y, 6, '#fff');
+      return;
     }
     if (state === 'playing') {
       bird.vy = FLAP_POWER;
@@ -228,29 +263,23 @@
     if (e.code === 'Space') { e.preventDefault(); flap(); }
   });
   canvas.addEventListener('pointerdown', e => { e.preventDefault(); flap(); });
-  document.getElementById('startBtn').addEventListener('click', () => {
-    state = 'playing';
-    showPanel(null);
+
+  document.getElementById('startBtn').addEventListener('click', e => {
+    e.stopPropagation();
+    goReady(); // show bird bobbing, wait for first flap
   });
-  document.getElementById('restartBtn').addEventListener('click', () => {
-    initGame();
-    state = 'playing';
-    showPanel(null);
+  document.getElementById('restartBtn').addEventListener('click', e => {
+    e.stopPropagation();
+    goReady(); // show bird bobbing, wait for first flap
   });
 
   /* ── Particles ───────────────────────────────────────── */
   function spawnParticles (x, y, count, color) {
     for (let i = 0; i < count; i++) {
-      const angle = Math.random() * Math.PI * 2;
-      const speed = 1 + Math.random() * 3;
-      particles.push({
-        x, y,
-        vx: Math.cos(angle) * speed,
-        vy: Math.sin(angle) * speed - 1,
-        life: 1,
-        color,
-        r: 2 + Math.random() * 3
-      });
+      const a = Math.random() * Math.PI * 2;
+      const s = 1 + Math.random() * 3;
+      particles.push({ x, y, vx: Math.cos(a)*s, vy: Math.sin(a)*s - 1,
+                        life: 1, color, r: 2 + Math.random() * 3 });
     }
   }
 
@@ -287,24 +316,20 @@
 
   /* ── Collision ───────────────────────────────────────── */
   function collides () {
-    // ground & ceiling
     if (bird.y + BIRD_R > BASE_H - GROUND_H) return true;
-    if (bird.y - BIRD_R < 0) return true;
-
+    if (bird.y - BIRD_R < 0)                 return true;
     for (const p of pipes) {
       const left  = p.x;
       const right = p.x + PIPE_W;
       if (BIRD_X + BIRD_R < left || BIRD_X - BIRD_R > right) continue;
-      // top pipe: 0..topH, bottom pipe: topH+GAP..BASE_H-GROUND_H
-      if (bird.y - BIRD_R < p.topH) return true;
-      if (bird.y + BIRD_R > p.topH + PIPE_GAP) return true;
+      if (bird.y - BIRD_R < p.topH)              return true;
+      if (bird.y + BIRD_R > p.topH + PIPE_GAP)   return true;
     }
     return false;
   }
 
   /* ── Draw helpers ────────────────────────────────────── */
   function drawBackground () {
-    // sky gradient
     const sky = ctx.createLinearGradient(0, 0, 0, px(BASE_H - GROUND_H));
     sky.addColorStop(0,   '#0d0b2e');
     sky.addColorStop(0.5, '#1a1060');
@@ -312,9 +337,8 @@
     ctx.fillStyle = sky;
     ctx.fillRect(0, 0, canvas.width, px(BASE_H - GROUND_H));
 
-    // stars (static, seeded by position)
     ctx.fillStyle = 'rgba(255,255,255,0.6)';
-    for (let i = 0; i < 60; i++) {
+    for (let i = 0; i < 70; i++) {
       const sx = ((i * 137 + 23) % BASE_W);
       const sy = ((i * 97  + 11) % (BASE_H - GROUND_H - 60));
       const sr = 0.5 + (i % 3) * 0.4;
@@ -326,49 +350,38 @@
 
   function drawGround () {
     const gy = px(BASE_H - GROUND_H);
-    // dirt block
     ctx.fillStyle = '#3b2a1a';
     ctx.fillRect(0, gy, canvas.width, px(GROUND_H));
-    // grass strip
     ctx.fillStyle = '#4caf50';
     ctx.fillRect(0, gy, canvas.width, px(14));
-    // lighter grass top
     ctx.fillStyle = '#66bb6a';
     ctx.fillRect(0, gy, canvas.width, px(6));
   }
 
   function drawPipe (p) {
-    const x  = px(p.x);
-    const w  = px(PIPE_W);
-    const bH = px(BASE_H - GROUND_H);  // usable height
-
+    const x        = px(p.x);
+    const w        = px(PIPE_W);
+    const bH       = px(BASE_H - GROUND_H);
     const topBottom = px(p.topH);
     const botTop    = px(p.topH + PIPE_GAP);
+    const capW      = px(PIPE_W + 10);
+    const capH      = px(22);
 
     const grad = ctx.createLinearGradient(x, 0, x + w, 0);
-    grad.addColorStop(0,    '#2e7d32');
-    grad.addColorStop(0.3,  '#43a047');
-    grad.addColorStop(0.7,  '#388e3c');
-    grad.addColorStop(1,    '#1b5e20');
+    grad.addColorStop(0,   '#2e7d32');
+    grad.addColorStop(0.3, '#43a047');
+    grad.addColorStop(0.7, '#388e3c');
+    grad.addColorStop(1,   '#1b5e20');
 
     ctx.fillStyle = grad;
-
-    // top pipe body
     ctx.fillRect(x, 0, w, topBottom);
-    // top pipe cap
-    const capW = px(PIPE_W + 10);
-    const capH = px(22);
     ctx.fillRect(x - px(5), topBottom - capH, capW, capH);
-    // highlight
     ctx.fillStyle = 'rgba(255,255,255,0.08)';
     ctx.fillRect(x + px(6), 0, px(8), topBottom - capH);
 
     ctx.fillStyle = grad;
-    // bottom pipe body
     ctx.fillRect(x, botTop, w, bH - botTop);
-    // bottom pipe cap
     ctx.fillRect(x - px(5), botTop, capW, capH);
-    // highlight
     ctx.fillStyle = 'rgba(255,255,255,0.08)';
     ctx.fillRect(x + px(6), botTop + capH, px(8), bH - botTop - capH);
   }
@@ -380,8 +393,7 @@
 
     const r = px(BIRD_R);
 
-    // body
-    const bodyGrad = ctx.createRadialGradient(-r * 0.2, -r * 0.2, r * 0.1, 0, 0, r);
+    const bodyGrad = ctx.createRadialGradient(-r*0.2, -r*0.2, r*0.1, 0, 0, r);
     bodyGrad.addColorStop(0, '#ffe066');
     bodyGrad.addColorStop(1, '#e6a800');
     ctx.fillStyle = bodyGrad;
@@ -389,30 +401,26 @@
     ctx.ellipse(0, 0, r, r * 0.9, 0, 0, Math.PI * 2);
     ctx.fill();
 
-    // wing
     ctx.fillStyle = '#ffca28';
     ctx.beginPath();
-    ctx.ellipse(-r * 0.2, r * 0.3, r * 0.55, r * 0.28, -0.5, 0, Math.PI * 2);
+    ctx.ellipse(-r*0.2, r*0.3, r*0.55, r*0.28, -0.5, 0, Math.PI*2);
     ctx.fill();
 
-    // eye white
     ctx.fillStyle = '#fff';
     ctx.beginPath();
-    ctx.arc(r * 0.35, -r * 0.2, r * 0.32, 0, Math.PI * 2);
+    ctx.arc(r*0.35, -r*0.2, r*0.32, 0, Math.PI*2);
     ctx.fill();
 
-    // pupil
     ctx.fillStyle = '#1a1a2e';
     ctx.beginPath();
-    ctx.arc(r * 0.44, -r * 0.16, r * 0.16, 0, Math.PI * 2);
+    ctx.arc(r*0.44, -r*0.16, r*0.16, 0, Math.PI*2);
     ctx.fill();
 
-    // beak
     ctx.fillStyle = '#ff8f00';
     ctx.beginPath();
-    ctx.moveTo(r * 0.7,  -r * 0.08);
-    ctx.lineTo(r * 1.25,  r * 0.06);
-    ctx.lineTo(r * 0.7,   r * 0.2);
+    ctx.moveTo(r*0.7,  -r*0.08);
+    ctx.lineTo(r*1.25,  r*0.06);
+    ctx.lineTo(r*0.7,   r*0.2);
     ctx.closePath();
     ctx.fill();
 
@@ -424,18 +432,25 @@
     requestAnimationFrame(loop);
 
     /* ---- UPDATE ---- */
+
+    // READY state: bird bobs gently in place, gravity OFF, no pipes
+    if (state === 'ready') {
+      bobT  += 0.045;
+      bird.y = BASE_H / 2 + Math.sin(bobT) * 9; // gentle sine bob around centre
+      bird.vy = 0;
+      bird.angle = Math.sin(bobT) * 0.12;        // subtle tilt with the bob
+    }
+
     if (state === 'playing') {
       frame++;
 
-      // bird physics
       bird.vy    += GRAVITY;
       bird.y     += bird.vy;
-      bird.angle  = Math.max(-0.45, Math.min(Math.PI / 2, bird.vy * 0.06));
+      bird.y      = Math.max(BIRD_R, bird.y); // clamp to ceiling
+      bird.angle  = Math.max(-0.45, Math.min(Math.PI / 2, bird.vy * 0.07));
 
-      // spawn pipes
       if (frame % PIPE_INTERVAL === 0) spawnPipe();
 
-      // move pipes & score
       for (const p of pipes) {
         p.x -= PIPE_SPEED;
         if (!p.passed && p.x + PIPE_W < BIRD_X) {
@@ -445,12 +460,10 @@
           spawnParticles(BIRD_X, bird.y - BIRD_R * 2, 8, '#ffd700');
         }
       }
-      // remove off-screen pipes
       pipes = pipes.filter(p => p.x + PIPE_W > -10);
 
       updateParticles();
 
-      // collision
       if (collides()) {
         state = 'dead';
         spawnParticles(BIRD_X, bird.y, 20, '#ffcc00');
@@ -477,23 +490,22 @@
     ctx.clearRect(0, 0, canvas.width, canvas.height);
 
     drawBackground();
-
-    // pipes
     pipes.forEach(drawPipe);
-
     drawGround();
     drawBird();
     drawParticles();
 
-    // idle pulsing hint
-    if (state === 'idle') {
+    // "ready" prompt — pulsing tap hint drawn on canvas
+    if (state === 'ready') {
+      const pulse = 0.65 + 0.35 * Math.sin(Date.now() / 350);
       ctx.save();
-      const pulse = 0.7 + 0.3 * Math.sin(Date.now() / 400);
       ctx.globalAlpha = pulse;
       ctx.fillStyle   = '#fff';
-      ctx.font        = `bold ${px(16)}px 'Segoe UI', sans-serif`;
+      ctx.font        = `bold ${px(17)}px 'Segoe UI', sans-serif`;
       ctx.textAlign   = 'center';
-      ctx.fillText('Tap to flap!', px(BASE_W / 2), px(BASE_H - GROUND_H - 18));
+      ctx.shadowColor = '#ff6b9d';
+      ctx.shadowBlur  = px(10);
+      ctx.fillText('Press SPACE or tap to fly!', px(BASE_W / 2), px(BASE_H / 2 + 60));
       ctx.restore();
     }
   }
